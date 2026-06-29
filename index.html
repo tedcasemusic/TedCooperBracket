@@ -70,6 +70,24 @@ p{margin:0}
 .stepn{flex:none;width:28px;height:28px;border-radius:999px;background:var(--gold);color:var(--ink);font-weight:700;display:flex;align-items:center;justify-content:center;font-size:14px}
 .scoregrid{display:grid;grid-template-columns:1fr auto;row-gap:8px;font-size:14px;margin-top:8px}
 .scoregrid .r{text-align:right;font-weight:600}
+.export{background:#fff;color:#111;min-height:100vh;padding:16px}
+.exp-toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+.exp-toolbar .btn{width:auto}
+.exp-person{padding:8px 0 22px;border-bottom:1px solid #eee;margin-bottom:10px}
+.exp-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.exp-name{font-size:18px;font-weight:800}
+.exp-sub{font-size:11px;color:#777}
+.exp-bracket{display:flex;align-items:stretch;gap:5px;height:380px;font-size:10.5px;color:#111}
+.exp-col{display:flex;flex-direction:column;flex:1;min-width:0}
+.exp-cell{flex:1;display:flex;align-items:center}
+.exp-pair{width:100%;border:1px solid #bbb;border-radius:6px;overflow:hidden}
+.exp-team{padding:3px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-bottom:1px solid #eee}
+.exp-team:last-child{border-bottom:none}
+.exp-team.win{font-weight:800}
+.exp-team.lose{color:#b0b0b0}
+.exp-slot{width:100%;border-bottom:1px solid #999;padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+.exp-champ{align-items:center;justify-content:center;flex:1.2}
+@media print{ .noprint{display:none!important} body{background:#fff} .export{padding:0} .exp-person{break-inside:avoid;page-break-after:always} @page{size:landscape;margin:9mm} }
 </style>
 </head>
 <body>
@@ -257,8 +275,52 @@ function render(){
   else if(S.loading) html='<div class="center">Loading the pool…<div style="margin-top:18px"><button class="btn muted" data-act="retry" style="display:inline-block;width:auto;padding:8px 18px">Taking too long? Retry</button></div></div>';
   else if(S.err && !S.pool) html=errorView();
   else if(!S.pool) html=createView();
+  else if(S.view==="export") html=exportView();
   else html=mainView();
   document.getElementById("app").innerHTML=html;
+}
+function pairCell(id,picks){ var m=R32MAP[id], w=picks[id]; function tm(n){ var cls=w?(n===w?"win":"lose"):""; return '<div class="exp-team '+cls+'">'+esc(n)+'</div>'; } return '<div class="exp-cell"><div class="exp-pair">'+tm(m.a)+tm(m.b)+'</div></div>'; }
+function slotCell(id,picks,align){ var t=picks[id]; return '<div class="exp-cell"><div class="exp-slot" style="text-align:'+(align||"left")+'">'+(t?(flag(t)+" "+esc(t)):"—")+'</div></div>'; }
+function personBracketHTML(picks){
+  var L0=["L1","L2","L3","L4","L5","L6","L7","L8"].map(function(id){return pairCell(id,picks)}).join("");
+  var L1=["LA","LB","LC","LD"].map(function(id){return slotCell(id,picks,"left")}).join("");
+  var L2=["QL1","QL2"].map(function(id){return slotCell(id,picks,"left")}).join("");
+  var L3=slotCell("SF1",picks,"left");
+  var R3=slotCell("SF2",picks,"right");
+  var R2=["QR1","QR2"].map(function(id){return slotCell(id,picks,"right")}).join("");
+  var R1=["RA","RB","RC","RD"].map(function(id){return slotCell(id,picks,"right")}).join("");
+  var R0=["R1","R2","R3","R4","R5","R6","R7","R8"].map(function(id){return pairCell(id,picks)}).join("");
+  var champ=picks.FIN, third=picks.THIRD;
+  var center='<div class="exp-col exp-champ"><div style="border:2px solid #c9962e;border-radius:8px;padding:8px 10px;min-width:84px;text-align:center"><div style="font-size:8px;letter-spacing:.15em;text-transform:uppercase;color:#999">Champion</div><div style="font-size:22px;line-height:1.1">'+(champ?flag(champ):"—")+'</div><div style="font-weight:800;font-size:12px">'+(champ?esc(champ):"")+'</div></div>'+(third?'<div style="font-size:9px;color:#666;margin-top:8px">3rd: '+flag(third)+" "+esc(third)+'</div>':"")+'</div>';
+  return '<div class="exp-bracket"><div class="exp-col">'+L0+'</div><div class="exp-col">'+L1+'</div><div class="exp-col">'+L2+'</div><div class="exp-col">'+L3+'</div>'+center+'<div class="exp-col">'+R3+'</div><div class="exp-col">'+R2+'</div><div class="exp-col">'+R1+'</div><div class="exp-col">'+R0+'</div></div>';
+}
+function backupData(){ return {exportedAt:new Date().toISOString(), pool:S.pool, results:S.results, entries:S.entries}; }
+function downloadBackup(){
+  try{
+    var blob=new Blob([JSON.stringify(backupData(),null,2)],{type:"application/json"});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement("a"); a.href=url;
+    a.download=((S.pool&&S.pool.name)?S.pool.name.replace(/[^a-z0-9]+/gi,"-"):"pool")+"-backup.json";
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); },1500);
+  }catch(e){ set({notice:"Download blocked — use Copy data instead."}); }
+}
+function exportView(){
+  var players=Object.keys(S.entries).map(function(k){return S.entries[k];});
+  var today=new Date().toLocaleDateString();
+  var h='<div class="export"><div class="exp-toolbar noprint">'
+    +'<button class="btn muted" data-act="exitexport">← Back</button>'
+    +'<button class="btn gold" data-act="print">🖨 Print / Save PDF</button>'
+    +'<button class="btn muted" data-act="dljson">⬇ Data (.json)</button>'
+    +'<button class="btn muted" data-act="copyjson">'+(S.notice==="copied"?"Copied ✓":"Copy data")+'</button>'
+    +'</div>';
+  h+='<div class="exp-sub noprint" style="margin:-6px 0 14px">Print makes one bracket per page (use landscape). The data file restores every pick if anything breaks.</div>';
+  if(players.length===0){ return h+'<p style="color:#666">No brackets to export yet.</p></div>'; }
+  players.forEach(function(p){
+    var sc=scoreEntry(p.picks,S.results);
+    h+='<div class="exp-person"><div class="exp-head"><div class="exp-name">'+esc(p.name)+'</div><div class="exp-sub">'+(S.pool?esc(S.pool.name):"")+' · '+today+' · '+sc.pts+' pts · champion: '+(p.picks.FIN?esc(p.picks.FIN):"—")+'</div></div>'+personBracketHTML(p.picks)+'</div>';
+  });
+  return h+'</div>';
 }
 function errorView(){
   return '<div class="pad"><div class="eyebrow">Connection</div><h1>Can\u2019t reach the pool</h1><p class="sm gold" style="margin:8px 0 4px">'+esc(S.err)+'</p><p class="sm muted" style="margin-bottom:6px">Things to check:</p><ul class="sm muted" style="margin:0 0 20px;padding-left:18px;line-height:1.6"><li>Your Supabase project is active (not paused) in the dashboard.</li><li>The setup SQL ran and the <b>kv</b> table exists.</li><li>Try opening the link in Safari/Chrome directly (some in-app browsers block it).</li></ul><button class="btn gold" data-act="retry">Retry</button></div>';
@@ -333,7 +395,7 @@ function mainView(){
   }
   else if(S.view==="board"){
     var standings=Object.keys(S.entries).map(function(k){ var e=S.entries[k]; var sc=scoreEntry(e.picks,S.results); return {key:k,name:e.name,picks:e.picks,pts:sc.pts,correct:sc.correct}; }).sort(function(a,b){ return b.pts-a.pts||b.correct-a.correct||a.name.localeCompare(b.name); });
-    h+='<div class="rowhead"><h2>Standings</h2><button class="btn sm muted" data-act="refresh">↻ Refresh</button></div>';
+    h+='<div class="rowhead"><h2>Standings</h2><div style="display:flex;gap:8px"><button class="btn sm muted" data-act="openexport">⬇ Backup</button><button class="btn sm muted" data-act="refresh">↻ Refresh</button></div></div>';
     if(!standings.length){ h+='<p class="sm muted" style="padding:0 4px">No brackets yet. Be the first to pick.</p>'; }
     else {
       standings.forEach(function(s,i){ var me=norm(s.name)===norm(S.me);
@@ -369,6 +431,11 @@ document.getElementById("app").addEventListener("click",function(e){
   else if(act==="logout") logout();
   else if(act==="refresh") refreshNow();
   else if(act==="retry"){ S.err=""; S.loading=true; render(); refreshNow().then(function(){ S.loading=false; render(); }); }
+  else if(act==="openexport") set({view:"export",notice:""});
+  else if(act==="exitexport") set({view:"board",notice:""});
+  else if(act==="print"){ window.print(); }
+  else if(act==="dljson"){ downloadBackup(); }
+  else if(act==="copyjson"){ try{ if(navigator.clipboard) navigator.clipboard.writeText(JSON.stringify(backupData(),null,2)); }catch(e){} set({notice:"copied"}); setTimeout(function(){ if(S.notice==="copied") set({notice:""}); },2000); }
   else if(act==="clear") clearResults();
 });
 document.getElementById("app").addEventListener("input",function(e){
