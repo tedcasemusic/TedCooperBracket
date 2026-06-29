@@ -25,8 +25,8 @@ p{margin:0}
 .hdrtop{display:flex;align-items:center;justify-content:space-between}
 .chip{font-size:12px;padding:6px 12px;border-radius:999px;background:var(--pitch);color:var(--muted);border:1px solid var(--line)}
 .chip.gold{color:var(--gold)}
-.tabs{display:flex;gap:8px;margin-top:12px}
-.tab{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:8px;border-radius:999px;font-size:14px;font-weight:600;background:var(--pitch);color:var(--chalk);border:1px solid var(--line);cursor:pointer;transition:transform .1s}
+.tabs{display:flex;gap:8px;margin-top:12px;overflow-x:auto}
+.tab{flex:0 0 auto;display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 14px;border-radius:999px;font-size:14px;font-weight:600;background:var(--pitch);color:var(--chalk);border:1px solid var(--line);cursor:pointer;transition:transform .1s;white-space:nowrap}
 .tab:active{transform:scale(.96)}
 .tab.on{background:var(--gold);color:var(--ink);border-color:var(--gold)}
 .card{background:var(--pitch);border:1px solid var(--line);border-radius:16px;padding:20px}
@@ -97,9 +97,18 @@ var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYm
 var CONFIGURED = !/YOUR-PROJECT|YOUR-ANON/.test(SUPABASE_URL + SUPABASE_ANON_KEY);
 var KVURL = SUPABASE_URL.replace(/\/$/,"") + "/rest/v1/kv";
 var HDRS = {apikey:SUPABASE_ANON_KEY, Authorization:"Bearer "+SUPABASE_ANON_KEY, "Content-Type":"application/json"};
-function kvAll(){ return fetch(KVURL+"?select=key,value",{headers:HDRS}).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(rows){ var o={}; rows.forEach(function(x){o[x.key]=x.value}); return o; }); }
-function kvSet(k,v){ return fetch(KVURL,{method:"POST",headers:Object.assign({},HDRS,{Prefer:"resolution=merge-duplicates,return=minimal"}),body:JSON.stringify([{key:k,value:v}])}).then(function(r){ if(!r.ok) throw 0; }); }
-function kvDel(k){ return fetch(KVURL+"?key=eq."+encodeURIComponent(k),{method:"DELETE",headers:HDRS}).then(function(r){ if(!r.ok) throw 0; }); }
+function fetchT(url,opts){
+  opts=opts||{};
+  return new Promise(function(resolve,reject){
+    var done=false;
+    var timer=setTimeout(function(){ if(!done){ done=true; reject(new Error("timed out — no response")); } },12000);
+    fetch(url,opts).then(function(r){ if(!done){ done=true; clearTimeout(timer); resolve(r); } },
+      function(){ if(!done){ done=true; clearTimeout(timer); reject(new Error("network blocked")); } });
+  });
+}
+function kvAll(){ return fetchT(KVURL+"?select=key,value",{headers:HDRS}).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); }).then(function(rows){ var o={}; rows.forEach(function(x){o[x.key]=x.value}); return o; }); }
+function kvSet(k,v){ return fetchT(KVURL,{method:"POST",headers:Object.assign({},HDRS,{Prefer:"resolution=merge-duplicates,return=minimal"}),body:JSON.stringify([{key:k,value:v}])}).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); }); }
+function kvDel(k){ return fetchT(KVURL+"?key=eq."+encodeURIComponent(k),{method:"DELETE",headers:HDRS}).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); }); }
 function loadAll(){ return kvAll().then(function(kv){ var entries={}; Object.keys(kv).forEach(function(k){ if(k.indexOf("entry:")===0) entries[k.slice(6)]=kv[k]; }); return {pool:kv["pool"]||null, results:kv["results"]||{}, entries:entries}; }); }
 
 /* ---------- data ---------- */
@@ -121,12 +130,12 @@ function totalPicks(p){ return SCOREABLE.filter(function(m){return p&&p[m]}).len
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(ch){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch];}); }
 
 /* ---------- state ---------- */
-var S={view:"home",loading:true,err:"",notice:"",pool:null,results:{},entries:{},me:(function(){try{return localStorage.getItem("wc_name")||""}catch(e){return ""}})(),draftPicks:{},buildRound:"r32",resRound:"r32",confirmSubmit:false,busy:false};
+var S={view:"board",loading:true,err:"",notice:"",pool:null,results:{},entries:{},me:(function(){try{return localStorage.getItem("wc_name")||""}catch(e){return ""}})(),draftPicks:{},buildRound:"r32",resRound:"r32",cmpRound:"r32",confirmSubmit:false,busy:false};
 var dPool="",dLogin="";
 function set(patch){ Object.assign(S,patch); render(); }
 function inputFocused(){ var a=document.activeElement; return a&&(a.tagName==="INPUT"||a.tagName==="TEXTAREA"); }
 
-function refreshNow(){ return loadAll().then(function(d){ S.pool=d.pool; S.results=d.results; S.entries=d.entries; S.err=""; render(); }).catch(function(){ S.err="Couldn't reach the database. Check the Supabase URL/key, then Refresh."; render(); }); }
+function refreshNow(){ return loadAll().then(function(d){ S.pool=d.pool; S.results=d.results; S.entries=d.entries; S.err=""; render(); }).catch(function(e){ S.err="Couldn't reach the database ("+((e&&e.message)||"error")+")."; render(); }); }
 
 /* ---------- actions ---------- */
 function createPool(){ S.busy=true; render(); kvSet("pool",{name:(dPool||"").trim()||"World Cup 2026 Pool",createdAt:Date.now()}).then(refreshNow).then(function(){S.busy=false;render();}).catch(function(){S.busy=false;S.notice="Couldn't save — check your Supabase setup.";render();}); }
@@ -195,15 +204,64 @@ function scoringCard(){
   var rows=[["Round of 32","1"],["Round of 16","3"],["Quarterfinal","6"],["Semifinal","10"],["Champion","25"],["Third place","5"]];
   return '<div class="card"><div class="lbl gold">Scoring</div><div class="scoregrid">'+rows.map(function(r){return '<span class="muted">'+r[0]+'</span><span class="r">'+r[1]+' pt'+(r[1]==="1"?"":"s")+'</span>'}).join("")+'</div></div>';
 }
+function firstName(n){ var f=(n||"").trim().split(/\s+/)[0]||(n||""); return f.length>11?f.slice(0,11):f; }
+function distinctDefined(arr){ var out=[]; arr.forEach(function(v){ if(v&&out.indexOf(v)<0) out.push(v); }); return out; }
+function compareView(){
+  var players=Object.keys(S.entries).map(function(k){return S.entries[k];});
+  if(players.length===0) return '<p class="sm muted" style="padding:0 4px">No brackets submitted yet — nothing to compare.</p>';
+  var R=S.cmpRound||"r32", me=norm(S.me), resFIN=S.results.FIN;
+  var h='<div class="rowhead"><h2>Compare brackets</h2><span class="xs muted">'+players.length+' players</span></div>';
+
+  /* champions showcase */
+  h+='<div class="lbl gold" style="margin:0 4px 8px">🏆 Champion picks</div>';
+  h+='<div style="display:flex;gap:10px;overflow-x:auto;padding-bottom:6px;margin-bottom:16px">';
+  players.forEach(function(p){
+    var ch=p.picks.FIN, st=resFIN&&ch?(ch===resFIN?"ok":"no"):"", mine=norm(p.name)===me;
+    var bd=st==="ok"?"var(--gold)":(mine?"var(--goldD)":"var(--line)"), op=st==="no"?"0.5":"1";
+    h+='<div style="flex:0 0 auto;width:104px;text-align:center;background:'+(st==="ok"?"rgba(242,193,78,.12)":"var(--pitch)")+';border:1px solid '+bd+';border-radius:14px;padding:14px 8px;opacity:'+op+'"><div style="font-size:34px;line-height:1">'+(ch?flag(ch):"—")+'</div><div style="font-weight:700;font-size:13px;margin-top:6px">'+esc(ch||"No pick")+(st==="ok"?' ✓':"")+'</div><div class="xs muted" style="margin-top:3px">'+esc(firstName(p.name))+(mine?" (you)":"")+'</div></div>';
+  });
+  h+='</div>';
+
+  /* agreement stat over the fixed first round */
+  var agree=0, split=0;
+  ROUNDS[0].matches.forEach(function(m){
+    var ps=players.map(function(p){return p.picks[m];});
+    if(ps.every(Boolean)&&players.length>1){ (distinctDefined(ps).length===1?agree++:split++); }
+  });
+  if(agree+split>0) h+='<div class="card" style="margin-bottom:16px;padding:14px"><p class="sm">Of the first-round matchups everyone picked: <b style="color:var(--gold)">'+agree+'</b> unanimous · <b style="color:var(--gold)">'+split+'</b> split.</p></div>';
+
+  /* round selector */
+  h+='<div class="pills">'+ROUNDS.map(function(r){ var on=R===r.key; return '<button class="pill'+(on?" on":"")+'" data-act="round" data-round="'+r.key+'">'+r.short+'</button>'; }).join("")+'</div>';
+
+  /* per-matchup chips */
+  var ms = R==="final" ? ["FIN","THIRD"] : ROUNDS.find(function(r){return r.key===R}).matches.slice();
+  ms.forEach(function(m,i){
+    var label = R==="r32" ? (R32MAP[m].a+" vs "+R32MAP[m].b) : (m==="FIN"?"Champion":(m==="THIRD"?"Third place":("Bracket slot "+(i+1))));
+    var res=S.results[m];
+    var defs=players.map(function(p){return p.picks[m];});
+    var dd=distinctDefined(defs);
+    var tag = (defs.every(Boolean)&&players.length>1&&dd.length===1) ? '<span class="xs muted"> · unanimous</span>' : (dd.length>1?'<span class="xs gold"> · split</span>':"");
+    var chips=players.map(function(p){
+      var pk=p.picks[m], st=res&&pk?(pk===res?"ok":"no"):"", mine=norm(p.name)===me;
+      var bg=st==="ok"?"rgba(242,193,78,.18)":"var(--pitch)", bd=st==="ok"?"var(--gold)":(mine?"var(--goldD)":"var(--line)"), op=st==="no"?"0.5":"1";
+      return '<span style="display:inline-flex;align-items:center;gap:5px;background:'+bg+';border:1px solid '+bd+';border-radius:999px;padding:6px 11px;opacity:'+op+';font-size:13px"><span>'+(pk?flag(pk):"")+'</span><span style="font-weight:600">'+esc(pk||"—")+'</span><span class="xs muted">'+esc(firstName(p.name))+'</span>'+(st==="ok"?' <span class="gold">✓</span>':"")+'</span>';
+    }).join("");
+    h+='<div class="card" style="margin-bottom:10px;padding:14px"><div class="xs muted" style="margin-bottom:9px">'+esc(label)+tag+(res?(' · won by '+flag(res)+" "+esc(res)):"")+'</div><div style="display:flex;flex-wrap:wrap;gap:8px">'+chips+'</div></div>';
+  });
+  return h;
+}
 
 function render(){
   var html;
   if(!CONFIGURED) html=setupView();
-  else if(S.loading) html='<div class="center">Loading the pool…</div>';
+  else if(S.loading) html='<div class="center">Loading the pool…<div style="margin-top:18px"><button class="btn muted" data-act="retry" style="display:inline-block;width:auto;padding:8px 18px">Taking too long? Retry</button></div></div>';
+  else if(S.err && !S.pool) html=errorView();
   else if(!S.pool) html=createView();
-  else if(!S.me) html=loginView();
   else html=mainView();
   document.getElementById("app").innerHTML=html;
+}
+function errorView(){
+  return '<div class="pad"><div class="eyebrow">Connection</div><h1>Can\u2019t reach the pool</h1><p class="sm gold" style="margin:8px 0 4px">'+esc(S.err)+'</p><p class="sm muted" style="margin-bottom:6px">Things to check:</p><ul class="sm muted" style="margin:0 0 20px;padding-left:18px;line-height:1.6"><li>Your Supabase project is active (not paused) in the dashboard.</li><li>The setup SQL ran and the <b>kv</b> table exists.</li><li>Try opening the link in Safari/Chrome directly (some in-app browsers block it).</li></ul><button class="btn gold" data-act="retry">Retry</button></div>';
 }
 function setupView(){
   var steps=[["1","Make a free Supabase project at supabase.com (New project, name it, set a password, wait ~2 min)."],["2","SQL Editor → New query → paste the snippet from the top of this file's code → Run."],["3","Project Settings → API → copy your Project URL and anon public key."],["4","Paste both into SUPABASE_URL and SUPABASE_ANON_KEY near the top of this file, then re-host."]];
@@ -221,12 +279,15 @@ function mainView(){
   var canBuild=S.me&&!myEntry&&!locked;
   var resultsPosted=SCOREABLE.filter(function(m){return S.results[m]}).length;
   var h='<div class="hdr"><div class="hdrtop"><div><div class="eyebrow">World Cup 2026</div><h1 style="font-size:20px">'+esc(S.pool.name)+'</h1></div><span class="chip'+(locked?" gold":"")+'">'+(locked?"🔒 Locked":"Open")+'</span></div>';
-  h+='<div class="tabs"><button class="tab'+(["home","build","mine"].indexOf(S.view)>=0?" on":"")+'" data-act="tab" data-tab="home">🎯 Pool</button><button class="tab'+(S.view==="board"?" on":"")+'" data-act="tab" data-tab="board">🏅 Standings</button><button class="tab'+(S.view==="results"?" on":"")+'" data-act="tab" data-tab="results">🏆 Results</button></div></div>';
+  h+='<div class="tabs"><button class="tab'+(["home","build","mine"].indexOf(S.view)>=0?" on":"")+'" data-act="tab" data-tab="home">🎯 Pool</button><button class="tab'+(S.view==="board"?" on":"")+'" data-act="tab" data-tab="board">🏅 Standings</button><button class="tab'+(S.view==="compare"?" on":"")+'" data-act="tab" data-tab="compare">🆚 Compare</button><button class="tab'+(S.view==="results"?" on":"")+'" data-act="tab" data-tab="results">🏆 Results</button></div></div>';
   h+='<div class="wrap" style="padding-top:20px">';
   if(S.err) h+='<div class="banner">'+esc(S.err)+'</div>';
 
   if(S.view==="home"){
     h+='<div class="stack">';
+    if(!S.me){
+      h+='<div class="card"><div style="font-size:18px;font-weight:700;margin-bottom:4px">Join the pool</div><p class="sm muted" style="margin-bottom:12px">Enter your name to make your own bracket. You can browse Standings and Compare without it.</p><input class="inp" data-field="login" placeholder="Your name" value="'+esc(dLogin)+'" style="margin-bottom:8px">'+(S.notice?'<p class="sm gold" style="margin:0 4px 8px">'+esc(S.notice)+'</p>':"")+'<button class="btn gold" data-act="login">Join &amp; make my bracket</button></div>';
+    } else {
     h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:0 4px"><span class="sm muted">Signed in as <b style="color:var(--chalk)">'+esc(S.me)+'</b></span><button class="btn sm muted" data-act="logout">Switch</button></div>';
     if(myEntry){
       var sc=scoreEntry(myEntry.picks,S.results);
@@ -235,6 +296,7 @@ function mainView(){
       h+='<div class="card"><div style="font-size:18px;font-weight:700;margin-bottom:4px">Pool\u2019s locked 🔒</div><p class="sm muted">Games have started, so new brackets are closed. Follow the live standings.</p></div>';
     } else {
       h+='<div class="card"><div style="font-size:18px;font-weight:700;margin-bottom:4px">You haven\u2019t picked yet</div><p class="sm muted" style="margin-bottom:12px">Fill out your bracket and submit before the first game. Once you submit, picks are final.</p><button class="btn gold" data-act="startbuild">Make my bracket</button></div>';
+    }
     }
     h+='<div class="inforow"><span class="sm muted">Players</span><b>'+Object.keys(S.entries).length+'</b></div>';
     h+='<div class="inforow"><span class="sm muted">Results posted</span><b>'+resultsPosted+' / 31</b></div>';
@@ -280,6 +342,7 @@ function mainView(){
       if(resultsPosted===0) h+='<p class="xs muted" style="margin:16px 4px">Everyone\u2019s at zero until games are scored on the Results tab.</p>';
     }
   }
+  else if(S.view==="compare"){ h+=compareView(); }
   else if(S.view==="results"){
     h+='<h2 style="margin:0 4px 4px">Post actual results</h2><p class="sm muted" style="margin:0 4px 16px">Tap the team that actually won each match. Anyone can do this; it scores everyone live.'+(locked?"":" Posting the first result locks new brackets.")+'</p>';
     h+=bracketHTML(S.results,{round:S.resRound,resultMode:true});
@@ -294,7 +357,7 @@ document.getElementById("app").addEventListener("click",function(e){
   var el=e.target.closest("[data-act]"); if(!el) return;
   var act=el.getAttribute("data-act");
   if(act==="tab"){ var t=el.getAttribute("data-tab"); set({view:t}); if(t==="board") refreshNow(); }
-  else if(act==="round"){ var rk=el.getAttribute("data-round"); if(S.view==="results") set({resRound:rk}); else set({buildRound:rk}); window.scrollTo({top:0,behavior:"smooth"}); }
+  else if(act==="round"){ var rk=el.getAttribute("data-round"); if(S.view==="results") set({resRound:rk}); else if(S.view==="compare") set({cmpRound:rk}); else set({buildRound:rk}); window.scrollTo({top:0,behavior:"smooth"}); }
   else if(act==="nextround"){ var i=ROUNDS.findIndex(function(r){return r.key===S.buildRound}); if(i<ROUNDS.length-1){ set({buildRound:ROUNDS[i+1].key}); window.scrollTo({top:0,behavior:"smooth"}); } }
   else if(act==="pick"){ pick(el.getAttribute("data-id"), decodeURIComponent(el.getAttribute("data-team"))); }
   else if(act==="startbuild") startBuild();
@@ -305,6 +368,7 @@ document.getElementById("app").addEventListener("click",function(e){
   else if(act==="login") login();
   else if(act==="logout") logout();
   else if(act==="refresh") refreshNow();
+  else if(act==="retry"){ S.err=""; S.loading=true; render(); refreshNow().then(function(){ S.loading=false; render(); }); }
   else if(act==="clear") clearResults();
 });
 document.getElementById("app").addEventListener("input",function(e){
