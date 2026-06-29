@@ -146,12 +146,24 @@ function clearResults(){ S.results={}; render(); kvSet("results",{}).catch(funct
 
 /* ---------- render ---------- */
 function bracketHTML(picks,opts){
-  opts=opts||{}; var round=opts.round, readOnly=opts.readOnly, resultMode=opts.resultMode;
+  opts=opts||{}; var round=opts.round, readOnly=opts.readOnly, resultMode=opts.resultMode, stepper=opts.stepper;
   var ar=ROUNDS.find(function(r){return r.key===round});
   function done(key){ return ROUNDS.find(function(x){return x.key===key}).matches.every(function(m){ var ab=teamsOf(m,picks); return ab[0]&&ab[1]&&picks[m]; }); }
   var count=ar.matches.filter(function(m){return picks[m]}).length;
   var champ=picks.FIN||null;
-  var h='<div class="pills">'+ROUNDS.map(function(r){ var on=round===r.key; return '<button class="pill'+(on?" on":"")+'" data-act="round" data-round="'+r.key+'">'+r.short+(done(r.key)?' <span style="color:'+(on?"var(--ink)":"var(--gold)")+'">✓</span>':'')+'</button>'; }).join("")+'</div>';
+  var h;
+  if(stepper){
+    var sidx=ROUNDS.findIndex(function(r){return r.key===round});
+    var tp=totalPicks(picks);
+    h='<div style="margin-bottom:18px"><div style="display:flex;gap:6px">'+ROUNDS.map(function(r,i){
+        var d=done(r.key), cur=i===sidx;
+        var bar=d?"var(--gold)":(cur?"var(--goldD)":"var(--line)");
+        var lab=cur?"var(--gold)":(d?"var(--chalk)":"var(--muted)");
+        return '<button data-act="round" data-round="'+r.key+'" style="flex:1;background:none;border:none;padding:0;cursor:pointer"><div style="height:6px;border-radius:999px;background:'+bar+'"></div><div class="xs" style="margin-top:6px;color:'+lab+';font-weight:'+(cur?700:600)+'">'+r.short+'</div></button>';
+      }).join("")+'</div><div class="xs muted" style="text-align:center;margin-top:10px">Round '+(sidx+1)+' of 5 · '+tp+' / 31 picks made</div></div>';
+  } else {
+    h='<div class="pills">'+ROUNDS.map(function(r){ var on=round===r.key; return '<button class="pill'+(on?" on":"")+'" data-act="round" data-round="'+r.key+'">'+r.short+(done(r.key)?' <span style="color:'+(on?"var(--ink)":"var(--gold)")+'">✓</span>':'')+'</button>'; }).join("")+'</div>';
+  }
   h+='<div class="rowhead"><h3>'+ar.label+'</h3><span class="xs muted">'+count+' / '+ar.matches.length+'</span></div>';
   ar.matches.forEach(function(id,i){
     if(round==="r32"&&i===0) h+='<div class="half"><span class="lbl">Top half</span><span class="ln"></span></div>';
@@ -232,13 +244,22 @@ function mainView(){
   }
   else if(S.view==="build"){
     if(canBuild){
-      h+='<div class="banner">Submitting is final — you can\u2019t change picks afterward. Take your time.</div>';
-      h+=bracketHTML(S.draftPicks,{round:S.buildRound});
+      var bidx=ROUNDS.findIndex(function(r){return r.key===S.buildRound});
+      var isFinal=bidx===ROUNDS.length-1;
+      h+='<div class="banner">Pick a winner in every matchup, round by round — you\u2019ll submit at the very end, after the Final.</div>';
+      h+=bracketHTML(S.draftPicks,{round:S.buildRound,stepper:true});
       if(S.notice) h+='<p class="sm gold" style="margin:12px 4px">'+esc(S.notice)+'</p>';
-      if(S.confirmSubmit){
-        h+='<div style="margin-top:20px"><p class="sm muted" style="text-align:center;margin-bottom:8px">Submit '+totalPicks(S.draftPicks)+' / 31 picks as final?</p><button class="btn gold" data-act="submit"'+(S.busy?" disabled":"")+' style="margin-bottom:8px">'+(S.busy?"Submitting…":"Yes, submit — final")+'</button><button class="btn muted" data-act="canceltemp">Keep editing</button></div>';
+      if(!isFinal){
+        var nx=ROUNDS[bidx+1];
+        h+='<button class="btn gold" data-act="nextround" style="margin-top:20px">Continue to '+nx.label+' →</button>';
+        h+='<p class="xs muted" style="text-align:center;margin-top:10px">Round '+(bidx+1)+' of 5 — keep going, you\u2019ll submit after the Final.</p>';
+      } else if(S.confirmSubmit){
+        var tp=totalPicks(S.draftPicks);
+        var warn = tp<31 ? '<p class="sm gold" style="text-align:center;margin-bottom:8px">Only '+tp+' of 31 picks are filled in — blank matchups score 0.</p>' : '<p class="sm muted" style="text-align:center;margin-bottom:8px">All 31 picks in.</p>';
+        h+='<div style="margin-top:20px">'+warn+'<p class="sm muted" style="text-align:center;margin-bottom:8px">Submit as final? You can\u2019t change picks afterward.</p><button class="btn gold" data-act="submit"'+(S.busy?" disabled":"")+' style="margin-bottom:8px">'+(S.busy?"Submitting…":"Yes, submit — final")+'</button><button class="btn muted" data-act="canceltemp">Keep editing</button></div>';
       } else {
         h+='<button class="btn gold" data-act="submit" style="margin-top:20px">Submit my bracket</button>';
+        h+='<p class="xs muted" style="text-align:center;margin-top:10px">Final round — pick your champion above, then submit.</p>';
       }
     } else {
       h+='<p class="sm muted" style="padding:0 4px">'+(myEntry?"You\u2019ve already submitted your bracket.":"The pool is locked.")+'</p>';
@@ -273,7 +294,8 @@ document.getElementById("app").addEventListener("click",function(e){
   var el=e.target.closest("[data-act]"); if(!el) return;
   var act=el.getAttribute("data-act");
   if(act==="tab"){ var t=el.getAttribute("data-tab"); set({view:t}); if(t==="board") refreshNow(); }
-  else if(act==="round"){ var rk=el.getAttribute("data-round"); if(S.view==="results") set({resRound:rk}); else set({buildRound:rk}); }
+  else if(act==="round"){ var rk=el.getAttribute("data-round"); if(S.view==="results") set({resRound:rk}); else set({buildRound:rk}); window.scrollTo({top:0,behavior:"smooth"}); }
+  else if(act==="nextround"){ var i=ROUNDS.findIndex(function(r){return r.key===S.buildRound}); if(i<ROUNDS.length-1){ set({buildRound:ROUNDS[i+1].key}); window.scrollTo({top:0,behavior:"smooth"}); } }
   else if(act==="pick"){ pick(el.getAttribute("data-id"), decodeURIComponent(el.getAttribute("data-team"))); }
   else if(act==="startbuild") startBuild();
   else if(act==="submit") submit();
