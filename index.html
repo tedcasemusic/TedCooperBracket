@@ -127,7 +127,7 @@ function fetchT(url,opts){
 function kvAll(){ return fetchT(KVURL+"?select=key,value",{headers:HDRS}).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); }).then(function(rows){ var o={}; rows.forEach(function(x){o[x.key]=x.value}); return o; }); }
 function kvSet(k,v){ return fetchT(KVURL,{method:"POST",headers:Object.assign({},HDRS,{Prefer:"resolution=merge-duplicates,return=minimal"}),body:JSON.stringify([{key:k,value:v}])}).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); }); }
 function kvDel(k){ return fetchT(KVURL+"?key=eq."+encodeURIComponent(k),{method:"DELETE",headers:HDRS}).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); }); }
-function loadAll(){ return kvAll().then(function(kv){ var entries={}; Object.keys(kv).forEach(function(k){ if(k.indexOf("entry:")===0) entries[k.slice(6)]=kv[k]; }); return {pool:kv["pool"]||null, results:kv["results"]||{}, entries:entries}; }); }
+function loadAll(){ return kvAll().then(function(kv){ var entries={}; Object.keys(kv).forEach(function(k){ if(k.indexOf("entry:")!==0) return; var rest=k.slice(6), ph=0, nm=rest; var mm=rest.match(/^p(\d+):(.+)$/); if(mm){ ph=parseInt(mm[1],10); nm=mm[2]; } if(!entries[ph]) entries[ph]={}; entries[ph][nm]=kv[k]; }); return {pool:kv["pool"]||null, results:kv["results"]||{}, entries:entries}; }); }
 
 /* ---------- data ---------- */
 var R32=[{id:"L1",a:"South Africa",b:"Canada"},{id:"L2",a:"Netherlands",b:"Morocco"},{id:"L3",a:"Germany",b:"Paraguay"},{id:"L4",a:"France",b:"Sweden"},{id:"L5",a:"Belgium",b:"Senegal"},{id:"L6",a:"USA",b:"Bosnia & H."},{id:"L7",a:"Spain",b:"Austria"},{id:"L8",a:"Portugal",b:"Croatia"},{id:"R1",a:"Brazil",b:"Japan"},{id:"R2",a:"Côte d'Ivoire",b:"Norway"},{id:"R3",a:"Mexico",b:"Ecuador"},{id:"R4",a:"England",b:"DR Congo"},{id:"R5",a:"Switzerland",b:"Algeria"},{id:"R6",a:"Colombia",b:"Ghana"},{id:"R7",a:"Australia",b:"Egypt"},{id:"R8",a:"Argentina",b:"Cabo Verde"}];
@@ -143,8 +143,18 @@ function prune(p){ ["r16","qf","sf","final"].forEach(function(rk){ ROUNDS.find(f
 var ROUND_OF={}; ROUNDS[0].matches.forEach(function(m){ROUND_OF[m]="r32"}); ROUNDS[1].matches.forEach(function(m){ROUND_OF[m]="r16"}); ROUNDS[2].matches.forEach(function(m){ROUND_OF[m]="qf"}); ROUNDS[3].matches.forEach(function(m){ROUND_OF[m]="sf"}); ROUND_OF.FIN="fin"; ROUND_OF.THIRD="third";
 var POINTS={r32:1,r16:3,qf:6,sf:10,fin:25,third:5};
 var SCOREABLE=[].concat(ROUNDS[0].matches,ROUNDS[1].matches,ROUNDS[2].matches,ROUNDS[3].matches,["FIN","THIRD"]);
-function scoreEntry(picks,results){ var pts=0,correct=0; SCOREABLE.forEach(function(m){ if(results[m]&&picks&&picks[m]===results[m]){ pts+=POINTS[ROUND_OF[m]]; correct++; } }); return {pts:pts,correct:correct}; }
-function totalPicks(p){ return SCOREABLE.filter(function(m){return p&&p[m]}).length; }
+function scoreEntry(picks,results,fromIdx){ var pts=0,correct=0; scoreableFrom(fromIdx||0).forEach(function(m){ if(results[m]&&picks&&picks[m]===results[m]){ pts+=POINTS[ROUND_OF[m]]; correct++; } }); return {pts:pts,correct:correct}; }
+var RIDX={r32:0,r16:1,qf:2,sf:3,fin:4,third:4};
+function scoreableFrom(idx){ return SCOREABLE.filter(function(m){ return RIDX[ROUND_OF[m]]>=idx; }); }
+function totalPicks(p,fromIdx){ return scoreableFrom(fromIdx||0).filter(function(m){return p&&p[m]}).length; }
+function roundComplete(i,results){ return ROUNDS[i].matches.every(function(m){ return (results||S.results)[m]; }); }
+function roundStarted(i,results){ return ROUNDS[i].matches.some(function(m){ return (results||S.results)[m]; }); }
+function currentPhase(){ for(var i=0;i<5;i++) if(!roundComplete(i)) return i; return 5; }
+function basePicks(idx){ var b={}; for(var i=0;i<idx;i++) ROUNDS[i].matches.forEach(function(m){ if(S.results[m]) b[m]=S.results[m]; }); return b; }
+function phaseName(i){ return i===0?"Full bracket":(ROUNDS[i].label+" bracket"); }
+function phaseEntries(i){ return S.entries[i]||{}; }
+function entryKey(ph,name){ return ph===0 ? ("entry:"+norm(name)) : ("entry:p"+ph+":"+norm(name)); }
+function compositeFor(nameKey){ var t=0,parts=[]; for(var i=0;i<5;i++){ var e=phaseEntries(i)[nameKey]; if(e){ var sc=scoreEntry(e.picks,S.results,i); t+=sc.pts; parts.push((i===0?"Full":ROUNDS[i].short)+": "+sc.pts); } } return {total:t,parts:parts}; }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(ch){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch];}); }
 
 /* ---------- state ---------- */
@@ -159,15 +169,22 @@ function refreshNow(){ return loadAll().then(function(d){ S.pool=d.pool; S.resul
 function createPool(){ S.busy=true; render(); kvSet("pool",{name:(dPool||"").trim()||"World Cup 2026 Pool",createdAt:Date.now()}).then(refreshNow).then(function(){S.busy=false;render();}).catch(function(){S.busy=false;S.notice="Couldn't save — check your Supabase setup.";render();}); }
 function login(){ var n=(dLogin||"").trim(); if(!n){ set({notice:"Type your name to enter."}); return; } try{localStorage.setItem("wc_name",n)}catch(e){} S.me=n; set({notice:"",view:"home"}); }
 function logout(){ try{localStorage.removeItem("wc_name")}catch(e){} dLogin=""; set({me:""}); }
-function startBuild(){ set({draftPicks:{},buildRound:"r32",confirmSubmit:false,notice:"",view:"build"}); }
+function startBuild(){ var ph=currentPhase(); if(ph>4){ set({notice:"The tournament is finished — no new brackets."}); return; } set({buildPhase:ph,draftPicks:{},buildRound:ROUNDS[ph].key,confirmSubmit:false,notice:"",view:"build"}); }
 function pick(id,team){
-  if(S.view==="build"){ var p=Object.assign({},S.draftPicks); p[id]=team; set({draftPicks:prune(p)}); }
+  if(S.view==="build"){
+    var ph=S.buildPhase||0;
+    if(RIDX[ROUND_OF[id]]<ph) return; /* earlier rounds are real results, not editable */
+    var merged=Object.assign({},basePicks(ph),S.draftPicks); merged[id]=team; merged=prune(merged);
+    var draft={}; scoreableFrom(ph).forEach(function(m){ if(merged[m]) draft[m]=merged[m]; });
+    set({draftPicks:draft});
+  }
   else if(S.view==="results"){ var r=Object.assign({},S.results); r[id]=team; r=prune(r); S.results=r; render(); kvSet("results",r).catch(function(){ set({err:"Result didn't save — Refresh and retry."}); }); }
 }
 function submit(){
   if(!S.confirmSubmit){ set({confirmSubmit:true}); return; }
   S.busy=true; render();
-  kvSet("entry:"+norm(S.me),{name:S.me.trim(),picks:S.draftPicks,submittedAt:Date.now()}).then(refreshNow).then(function(){ S.busy=false;S.confirmSubmit=false;S.view="board";render(); }).catch(function(){ S.busy=false;S.notice="Couldn't submit — check your connection and try again.";render(); });
+  var ph=S.buildPhase||0;
+  kvSet(entryKey(ph,S.me),{name:S.me.trim(),picks:S.draftPicks,phase:ph,submittedAt:Date.now()}).then(refreshNow).then(function(){ S.busy=false;S.confirmSubmit=false;S.view="board";render(); }).catch(function(){ S.busy=false;S.notice="Couldn't submit — check your connection and try again.";render(); });
 }
 function clearResults(){ S.results={}; render(); kvSet("results",{}).catch(function(){}); }
 
@@ -179,17 +196,20 @@ function bracketHTML(picks,opts){
   var count=ar.matches.filter(function(m){return picks[m]}).length;
   var champ=picks.FIN||null;
   var h;
+  var fromIdx=opts.fromIdx||0;
+  var RS=ROUNDS.slice(fromIdx);
+  var maxPicks=scoreableFrom(fromIdx).length;
   if(stepper){
-    var sidx=ROUNDS.findIndex(function(r){return r.key===round});
-    var tp=totalPicks(picks);
-    h='<div style="margin-bottom:18px"><div style="display:flex;gap:6px">'+ROUNDS.map(function(r,i){
+    var sidx=RS.findIndex(function(r){return r.key===round});
+    var tp=totalPicks(picks,fromIdx);
+    h='<div style="margin-bottom:18px"><div style="display:flex;gap:6px">'+RS.map(function(r,i){
         var d=done(r.key), cur=i===sidx;
         var bar=d?"var(--gold)":(cur?"var(--goldD)":"var(--line)");
         var lab=cur?"var(--gold)":(d?"var(--chalk)":"var(--muted)");
         return '<button data-act="round" data-round="'+r.key+'" style="flex:1;background:none;border:none;padding:0;cursor:pointer"><div style="height:6px;border-radius:999px;background:'+bar+'"></div><div class="xs" style="margin-top:6px;color:'+lab+';font-weight:'+(cur?700:600)+'">'+r.short+'</div></button>';
-      }).join("")+'</div><div class="xs muted" style="text-align:center;margin-top:10px">Round '+(sidx+1)+' of 5 · '+tp+' / 31 picks made</div></div>';
+      }).join("")+'</div><div class="xs muted" style="text-align:center;margin-top:10px">Round '+(sidx+1)+' of '+RS.length+' · '+tp+' / '+maxPicks+' picks made</div></div>';
   } else {
-    h='<div class="pills">'+ROUNDS.map(function(r){ var on=round===r.key; return '<button class="pill'+(on?" on":"")+'" data-act="round" data-round="'+r.key+'">'+r.short+(done(r.key)?' <span style="color:'+(on?"var(--ink)":"var(--gold)")+'">✓</span>':'')+'</button>'; }).join("")+'</div>';
+    h='<div class="pills">'+RS.map(function(r){ var on=round===r.key; return '<button class="pill'+(on?" on":"")+'" data-act="round" data-round="'+r.key+'">'+r.short+(done(r.key)?' <span style="color:'+(on?"var(--ink)":"var(--gold)")+'">✓</span>':'')+'</button>'; }).join("")+'</div>';
   }
   h+='<div class="rowhead"><h3>'+ar.label+'</h3><span class="xs muted">'+count+' / '+ar.matches.length+'</span></div>';
   ar.matches.forEach(function(id,i){
@@ -225,10 +245,22 @@ function scoringCard(){
 function firstName(n){ var f=(n||"").trim().split(/\s+/)[0]||(n||""); return f.length>11?f.slice(0,11):f; }
 function distinctDefined(arr){ var out=[]; arr.forEach(function(v){ if(v&&out.indexOf(v)<0) out.push(v); }); return out; }
 function compareView(){
-  var players=Object.keys(S.entries).map(function(k){return S.entries[k];});
-  if(players.length===0) return '<p class="sm muted" style="padding:0 4px">No brackets submitted yet — nothing to compare.</p>';
-  var R=S.cmpRound||"r32", me=norm(S.me), resFIN=S.results.FIN;
+  var phasesWith=[]; for(var i=0;i<5;i++) if(Object.keys(phaseEntries(i)).length) phasesWith.push(i);
+  if(phasesWith.length===0) return '<p class="sm muted" style="padding:0 4px">No brackets submitted yet — nothing to compare.</p>';
+  var cp=(typeof S.cmpPhase==="number"&&phasesWith.indexOf(S.cmpPhase)>=0)?S.cmpPhase:phasesWith[phasesWith.length-1];
+  var players=Object.keys(phaseEntries(cp)).map(function(k){return phaseEntries(cp)[k];});
+  var base=basePicks(cp);
+  players=players.map(function(p){ return {name:p.name,picks:Object.assign({},base,p.picks)}; });
+  if(RIDX[ROUND_OF[SCOREABLE[0]]]!==undefined){} /* no-op */
+  var minR=ROUNDS[cp].key;
+  var R=(S.cmpRound&&ROUNDS.findIndex(function(r){return r.key===S.cmpRound})>=cp)?S.cmpRound:minR;
+  var me=norm(S.me), resFIN=S.results.FIN;
   var h='<div class="rowhead"><h2>Compare brackets</h2><span class="xs muted">'+players.length+' players</span></div>';
+
+  /* phase selector */
+  if(phasesWith.length>1){
+    h+='<div class="pills" style="margin-bottom:10px">'+phasesWith.map(function(i){ var on=i===cp; return '<button class="pill'+(on?" on":"")+'" data-act="cmpphase" data-phase="'+i+'">'+esc(phaseName(i))+'</button>'; }).join("")+'</div>';
+  }
 
   /* champions showcase */
   h+='<div class="lbl gold" style="margin:0 4px 8px">🏆 Champion picks</div>';
@@ -240,21 +272,24 @@ function compareView(){
   });
   h+='</div>';
 
-  /* agreement stat over the fixed first round */
+  /* agreement stat over the phase's first pick round */
   var agree=0, split=0;
-  ROUNDS[0].matches.forEach(function(m){
+  ROUNDS[cp].matches.forEach(function(m){
     var ps=players.map(function(p){return p.picks[m];});
     if(ps.every(Boolean)&&players.length>1){ (distinctDefined(ps).length===1?agree++:split++); }
   });
-  if(agree+split>0) h+='<div class="card" style="margin-bottom:16px;padding:14px"><p class="sm">Of the first-round matchups everyone picked: <b style="color:var(--gold)">'+agree+'</b> unanimous · <b style="color:var(--gold)">'+split+'</b> split.</p></div>';
+  if(agree+split>0) h+='<div class="card" style="margin-bottom:16px;padding:14px"><p class="sm">Of this bracket\u2019s first-round matchups everyone picked: <b style="color:var(--gold)">'+agree+'</b> unanimous · <b style="color:var(--gold)">'+split+'</b> split.</p></div>';
 
-  /* round selector */
-  h+='<div class="pills">'+ROUNDS.map(function(r){ var on=R===r.key; return '<button class="pill'+(on?" on":"")+'" data-act="round" data-round="'+r.key+'">'+r.short+'</button>'; }).join("")+'</div>';
+  /* round selector (only rounds this phase covers) */
+  h+='<div class="pills">'+ROUNDS.slice(cp).map(function(r){ var on=R===r.key; return '<button class="pill'+(on?" on":"")+'" data-act="round" data-round="'+r.key+'">'+r.short+'</button>'; }).join("")+'</div>';
 
   /* per-matchup chips */
   var ms = R==="final" ? ["FIN","THIRD"] : ROUNDS.find(function(r){return r.key===R}).matches.slice();
+  var Ridx=ROUNDS.findIndex(function(r){return r.key===R});
   ms.forEach(function(m,i){
-    var label = R==="r32" ? (R32MAP[m].a+" vs "+R32MAP[m].b) : (m==="FIN"?"Champion":(m==="THIRD"?"Third place":("Bracket slot "+(i+1))));
+    var ab=teamsOf(m,players.length?players[0].picks:{});
+    var label = R===minR&&Ridx===cp ? ((teamsOf(m,base)[0]||"?")+" vs "+(teamsOf(m,base)[1]||"?")) : (m==="FIN"?"Champion":(m==="THIRD"?"Third place":("Bracket slot "+(i+1))));
+    if(R==="r32") label=R32MAP[m].a+" vs "+R32MAP[m].b;
     var res=S.results[m];
     var defs=players.map(function(p){return p.picks[m];});
     var dd=distinctDefined(defs);
@@ -306,7 +341,6 @@ function downloadBackup(){
   }catch(e){ set({notice:"Download blocked — use Copy data instead."}); }
 }
 function exportView(){
-  var players=Object.keys(S.entries).map(function(k){return S.entries[k];});
   var today=new Date().toLocaleDateString();
   var h='<div class="export"><div class="exp-toolbar noprint">'
     +'<button class="btn muted" data-act="exitexport">← Back</button>'
@@ -315,11 +349,16 @@ function exportView(){
     +'<button class="btn muted" data-act="copyjson">'+(S.notice==="copied"?"Copied ✓":"Copy data")+'</button>'
     +'</div>';
   h+='<div class="exp-sub noprint" style="margin:-6px 0 14px">Print makes one bracket per page (use landscape). The data file restores every pick if anything breaks.</div>';
-  if(players.length===0){ return h+'<p style="color:#666">No brackets to export yet.</p></div>'; }
-  players.forEach(function(p){
-    var sc=scoreEntry(p.picks,S.results);
-    h+='<div class="exp-person"><div class="exp-head"><div class="exp-name">'+esc(p.name)+'</div><div class="exp-sub">'+(S.pool?esc(S.pool.name):"")+' · '+today+' · '+sc.pts+' pts · champion: '+(p.picks.FIN?esc(p.picks.FIN):"—")+'</div></div>'+personBracketHTML(p.picks)+'</div>';
-  });
+  if(Object.keys(S.entries).length===0){ return h+'<p style="color:#666">No brackets to export yet.</p></div>'; }
+  for(var pi=0;pi<5;pi++){
+    var pe=phaseEntries(pi); var names=Object.keys(pe); if(!names.length) continue;
+    names.forEach(function(nk){
+      var p=pe[nk];
+      var sc=scoreEntry(p.picks,S.results,pi);
+      var merged=Object.assign({},basePicks(pi),p.picks);
+      h+='<div class="exp-person"><div class="exp-head"><div class="exp-name">'+esc(p.name)+' — '+esc(phaseName(pi))+'</div><div class="exp-sub">'+(S.pool?esc(S.pool.name):"")+' · '+today+' · '+sc.pts+' pts · champion: '+(p.picks.FIN?esc(p.picks.FIN):"—")+'</div></div>'+personBracketHTML(merged)+'</div>';
+    });
+  }
   return h+'</div>';
 }
 function errorView(){
@@ -336,11 +375,13 @@ function loginView(){
   return '<div class="pad"><div class="eyebrow">'+esc(S.pool.name)+'</div><h1>Who\u2019s playing?</h1><p class="sm muted" style="margin:4px 0 20px">Enter your name to join the live pool. Use the same name next time to return to your bracket.</p><input class="inp" data-field="login" placeholder="Your name" value="'+esc(dLogin)+'" style="margin-bottom:8px">'+(S.notice?'<p class="sm gold" style="margin:0 4px 8px">'+esc(S.notice)+'</p>':"")+'<button class="btn gold" data-act="login">Enter pool</button></div>';
 }
 function mainView(){
-  var locked=Object.keys(S.results).length>0;
-  var myEntry=S.entries[norm(S.me)]||null;
-  var canBuild=S.me&&!myEntry&&!locked;
+  var ph=currentPhase();                              /* which phase is open now (0-4), 5 = done */
+  var phLocked = ph>4 || roundStarted(ph);            /* current phase closed to new brackets? */
+  var myEntry = ph<=4 ? (phaseEntries(ph)[norm(S.me)]||null) : null;
+  var canBuild = S.me && ph<=4 && !myEntry && !phLocked;
   var resultsPosted=SCOREABLE.filter(function(m){return S.results[m]}).length;
-  var h='<div class="hdr"><div class="hdrtop"><div><div class="eyebrow">World Cup 2026</div><h1 style="font-size:20px">'+esc(S.pool.name)+'</h1></div><span class="chip'+(locked?" gold":"")+'">'+(locked?"🔒 Locked":"Open")+'</span></div>';
+  var chipTxt = ph>4 ? "🏁 Finished" : (phLocked ? "🔒 "+ROUNDS[ph].short+" locked" : ROUNDS[ph].short+" open");
+  var h='<div class="hdr"><div class="hdrtop"><div><div class="eyebrow">World Cup 2026</div><h1 style="font-size:20px">'+esc(S.pool.name)+'</h1></div><span class="chip'+(phLocked?" gold":"")+'">'+chipTxt+'</span></div>';
   h+='<div class="tabs"><button class="tab'+(["home","build","mine"].indexOf(S.view)>=0?" on":"")+'" data-act="tab" data-tab="home">🎯 Pool</button><button class="tab'+(S.view==="board"?" on":"")+'" data-act="tab" data-tab="board">🏅 Standings</button><button class="tab'+(S.view==="compare"?" on":"")+'" data-act="tab" data-tab="compare">🆚 Compare</button><button class="tab'+(S.view==="results"?" on":"")+'" data-act="tab" data-tab="results">🏆 Results</button></div></div>';
   h+='<div class="wrap" style="padding-top:20px">';
   if(S.err) h+='<div class="banner">'+esc(S.err)+'</div>';
@@ -351,16 +392,29 @@ function mainView(){
       h+='<div class="card"><div style="font-size:18px;font-weight:700;margin-bottom:4px">Join the pool</div><p class="sm muted" style="margin-bottom:12px">Enter your name to make your own bracket. You can browse Standings and Compare without it.</p><input class="inp" data-field="login" placeholder="Your name" value="'+esc(dLogin)+'" style="margin-bottom:8px">'+(S.notice?'<p class="sm gold" style="margin:0 4px 8px">'+esc(S.notice)+'</p>':"")+'<button class="btn gold" data-act="login">Join &amp; make my bracket</button></div>';
     } else {
     h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:0 4px"><span class="sm muted">Signed in as <b style="color:var(--chalk)">'+esc(S.me)+'</b></span><button class="btn sm muted" data-act="logout">Switch</button></div>';
-    if(myEntry){
-      var sc=scoreEntry(myEntry.picks,S.results);
-      h+='<div class="card"><div class="lbl">Your bracket · submitted</div><div style="font-size:18px;font-weight:700;margin:4px 0">'+sc.pts+' pts</div><div class="sm muted" style="margin-bottom:12px">'+(myEntry.picks.FIN?("Champion pick: "+flag(myEntry.picks.FIN)+" "+esc(myEntry.picks.FIN)):"—")+'</div><button class="btn ghost" data-act="viewmine">View my bracket</button></div>';
-    } else if(locked){
-      h+='<div class="card"><div style="font-size:18px;font-weight:700;margin-bottom:4px">Pool\u2019s locked 🔒</div><p class="sm muted">Games have started, so new brackets are closed. Follow the live standings.</p></div>';
+    var comp=compositeFor(norm(S.me));
+    if(ph<=4){
+      if(myEntry){
+        var sc=scoreEntry(myEntry.picks,S.results,ph);
+        h+='<div class="card"><div class="lbl">'+esc(phaseName(ph))+' · submitted</div><div style="font-size:18px;font-weight:700;margin:4px 0">'+sc.pts+' pts this bracket</div><div class="sm muted" style="margin-bottom:12px">'+(myEntry.picks.FIN?("Champion pick: "+flag(myEntry.picks.FIN)+" "+esc(myEntry.picks.FIN)):"—")+'</div><button class="btn ghost" data-act="viewmine" data-phase="'+ph+'">View this bracket</button></div>';
+      } else if(phLocked){
+        h+='<div class="card"><div style="font-size:18px;font-weight:700;margin-bottom:4px">'+esc(phaseName(ph))+' is locked 🔒</div><p class="sm muted">This round\u2019s games have started. A fresh bracket opens when the round finishes.</p></div>';
+      } else {
+        h+='<div class="card"><div class="lbl gold" style="margin-bottom:6px">'+(ph===0?"":"New round, fresh start")+'</div><div style="font-size:18px;font-weight:700;margin-bottom:4px">'+esc(phaseName(ph))+' is open</div><p class="sm muted" style="margin-bottom:12px">'+(ph===0?"Fill out your bracket and submit before the first game.":"Pick the "+ROUNDS[ph].label+" onward with the real qualified teams — "+scoreableFrom(ph).length+" picks. Your earlier brackets keep their points.")+'</p><button class="btn gold" data-act="startbuild">Make my '+esc(ROUNDS[ph].short)+' bracket</button></div>';
+      }
     } else {
-      h+='<div class="card"><div style="font-size:18px;font-weight:700;margin-bottom:4px">You haven\u2019t picked yet</div><p class="sm muted" style="margin-bottom:12px">Fill out your bracket and submit before the first game. Once you submit, picks are final.</p><button class="btn gold" data-act="startbuild">Make my bracket</button></div>';
+      h+='<div class="card"><div style="font-size:18px;font-weight:700;margin-bottom:4px">Tournament finished 🏁</div><p class="sm muted">Final composite standings are in — see who took the pool.</p></div>';
     }
+    /* past brackets */
+    var pastList='';
+    for(var pi=0;pi<5&&pi<=ph;pi++){
+      var pe=phaseEntries(pi)[norm(S.me)];
+      if(pe&&pi!==ph){ var psc=scoreEntry(pe.picks,S.results,pi); pastList+='<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)"><span class="sm">'+esc(phaseName(pi))+'</span><span style="display:flex;gap:12px;align-items:center"><b class="gold">'+psc.pts+' pts</b><button class="btn sm muted" data-act="viewmine" data-phase="'+pi+'">View</button></span></div>'; }
     }
-    h+='<div class="inforow"><span class="sm muted">Players</span><b>'+Object.keys(S.entries).length+'</b></div>';
+    if(pastList) h+='<div class="card"><div class="lbl" style="margin-bottom:4px">Your earlier brackets</div>'+pastList+'<div style="display:flex;justify-content:space-between;padding-top:10px"><span class="sm muted">Composite total</span><b class="gold">'+comp.total+' pts</b></div></div>';
+    }
+    var allNames={}; Object.keys(S.entries).forEach(function(pk){ Object.keys(S.entries[pk]).forEach(function(nk){ allNames[nk]=1; }); });
+    h+='<div class="inforow"><span class="sm muted">Players</span><b>'+Object.keys(allNames).length+'</b></div>';
     h+='<div class="inforow"><span class="sm muted">Results posted</span><b>'+resultsPosted+' / 31</b></div>';
     h+='<div class="card"><div class="lbl gold">Share the pool</div><p class="sm muted" style="margin-top:8px">Send friends this site\u2019s link. Everyone logs in with their name, picks a bracket, and the standings update live for all of you.</p></div>';
     h+=scoringCard();
@@ -368,47 +422,62 @@ function mainView(){
   }
   else if(S.view==="build"){
     if(canBuild){
+      var bph=S.buildPhase||0;
       var bidx=ROUNDS.findIndex(function(r){return r.key===S.buildRound});
       var isFinal=bidx===ROUNDS.length-1;
-      h+='<div class="banner">Pick a winner in every matchup, round by round — you\u2019ll submit at the very end, after the Final.</div>';
-      h+=bracketHTML(S.draftPicks,{round:S.buildRound,stepper:true});
+      var mergedB=Object.assign({},basePicks(bph),S.draftPicks);
+      var maxB=scoreableFrom(bph).length;
+      var stepsB=5-bph;
+      h+='<div class="banner">'+(bph===0?"Pick a winner in every matchup, round by round — you\u2019ll submit at the very end, after the Final.":esc(phaseName(bph))+": these are the real qualified teams. Pick round by round and submit after the Final.")+'</div>';
+      h+=bracketHTML(mergedB,{round:S.buildRound,stepper:true,fromIdx:bph});
       if(S.notice) h+='<p class="sm gold" style="margin:12px 4px">'+esc(S.notice)+'</p>';
       if(!isFinal){
         var nx=ROUNDS[bidx+1];
         h+='<button class="btn gold" data-act="nextround" style="margin-top:20px">Continue to '+nx.label+' →</button>';
-        h+='<p class="xs muted" style="text-align:center;margin-top:10px">Round '+(bidx+1)+' of 5 — keep going, you\u2019ll submit after the Final.</p>';
+        h+='<p class="xs muted" style="text-align:center;margin-top:10px">Round '+(bidx-bph+1)+' of '+stepsB+' — keep going, you\u2019ll submit after the Final.</p>';
       } else if(S.confirmSubmit){
-        var tp=totalPicks(S.draftPicks);
-        var warn = tp<31 ? '<p class="sm gold" style="text-align:center;margin-bottom:8px">Only '+tp+' of 31 picks are filled in — blank matchups score 0.</p>' : '<p class="sm muted" style="text-align:center;margin-bottom:8px">All 31 picks in.</p>';
+        var tp=totalPicks(S.draftPicks,bph);
+        var warn = tp<maxB ? '<p class="sm gold" style="text-align:center;margin-bottom:8px">Only '+tp+' of '+maxB+' picks are filled in — blank matchups score 0.</p>' : '<p class="sm muted" style="text-align:center;margin-bottom:8px">All '+maxB+' picks in.</p>';
         h+='<div style="margin-top:20px">'+warn+'<p class="sm muted" style="text-align:center;margin-bottom:8px">Submit as final? You can\u2019t change picks afterward.</p><button class="btn gold" data-act="submit"'+(S.busy?" disabled":"")+' style="margin-bottom:8px">'+(S.busy?"Submitting…":"Yes, submit — final")+'</button><button class="btn muted" data-act="canceltemp">Keep editing</button></div>';
       } else {
-        h+='<button class="btn gold" data-act="submit" style="margin-top:20px">Submit my bracket</button>';
+        h+='<button class="btn gold" data-act="submit" style="margin-top:20px">Submit my '+esc(ROUNDS[bph].short)+' bracket</button>';
         h+='<p class="xs muted" style="text-align:center;margin-top:10px">Final round — pick your champion above, then submit.</p>';
       }
     } else {
-      h+='<p class="sm muted" style="padding:0 4px">'+(myEntry?"You\u2019ve already submitted your bracket.":"The pool is locked.")+'</p>';
+      h+='<p class="sm muted" style="padding:0 4px">'+(myEntry?"You\u2019ve already submitted this round\u2019s bracket.":"This round\u2019s bracket is locked.")+'</p>';
     }
   }
-  else if(S.view==="mine"&&myEntry){
-    h+='<div class="rowhead"><h2>'+esc(S.me)+'\u2019s bracket</h2><span class="xs muted">submitted · final</span></div>';
-    h+=bracketHTML(myEntry.picks,{round:S.buildRound,readOnly:true});
+  else if(S.view==="mine"){
+    var vph=(typeof S.viewPhase==="number")?S.viewPhase:ph;
+    var ve=phaseEntries(vph)[norm(S.me)];
+    if(ve){
+      var mergedV=Object.assign({},basePicks(vph),ve.picks);
+      h+='<div class="rowhead"><h2>'+esc(S.me)+'\u2019s '+esc(phaseName(vph)).toLowerCase()+'</h2><span class="xs muted">submitted · final</span></div>';
+      h+=bracketHTML(mergedV,{round:S.buildRound,readOnly:true,fromIdx:vph});
+    } else { h+='<p class="sm muted" style="padding:0 4px">No bracket for that round.</p>'; }
   }
   else if(S.view==="board"){
-    var standings=Object.keys(S.entries).map(function(k){ var e=S.entries[k]; var sc=scoreEntry(e.picks,S.results); return {key:k,name:e.name,picks:e.picks,pts:sc.pts,correct:sc.correct}; }).sort(function(a,b){ return b.pts-a.pts||b.correct-a.correct||a.name.localeCompare(b.name); });
+    var nameMap={}; Object.keys(S.entries).forEach(function(pk){ Object.keys(S.entries[pk]).forEach(function(nk){ nameMap[nk]=S.entries[pk][nk].name; }); });
+    var standings=Object.keys(nameMap).map(function(nk){
+      var comp=compositeFor(nk);
+      var champ=null; for(var pi=4;pi>=0;pi--){ var e=phaseEntries(pi)[nk]; if(e&&e.picks.FIN){ champ=e.picks.FIN; break; } }
+      return {key:nk,name:nameMap[nk],total:comp.total,parts:comp.parts,champ:champ,brackets:comp.parts.length};
+    }).sort(function(a,b){ return b.total-a.total||b.brackets-a.brackets||a.name.localeCompare(b.name); });
     h+='<div class="rowhead"><h2>Standings</h2><div style="display:flex;gap:8px"><button class="btn sm muted" data-act="openexport">⬇ Backup</button><button class="btn sm muted" data-act="refresh">↻ Refresh</button></div></div>';
+    h+='<p class="xs muted" style="margin:-6px 4px 12px">Composite score — all brackets added together.</p>';
     if(!standings.length){ h+='<p class="sm muted" style="padding:0 4px">No brackets yet. Be the first to pick.</p>'; }
     else {
       standings.forEach(function(s,i){ var me=norm(s.name)===norm(S.me);
-        h+='<div class="srow'+(me?" me":"")+'"><div class="srank" style="'+(i===0?"color:var(--gold)":"")+'">'+(i===0?"👑":(i+1))+'</div><div style="flex:1"><div style="font-weight:600">'+esc(s.name)+(me?' <span class="xs gold">you</span>':"")+'</div><div class="xs muted">'+s.correct+' correct'+(s.picks.FIN?(" · "+flag(s.picks.FIN)+" "+esc(s.picks.FIN)):"")+'</div></div><div><div class="spts">'+s.pts+'</div><div class="xs muted" style="text-align:right;letter-spacing:.05em">PTS</div></div></div>';
+        h+='<div class="srow'+(me?" me":"")+'"><div class="srank" style="'+(i===0?"color:var(--gold)":"")+'">'+(i===0?"👑":(i+1))+'</div><div style="flex:1"><div style="font-weight:600">'+esc(s.name)+(me?' <span class="xs gold">you</span>':"")+'</div><div class="xs muted">'+(s.parts.length?s.parts.join(" · "):"no brackets")+(s.champ?(" · "+flag(s.champ)+" "+esc(s.champ)):"")+'</div></div><div><div class="spts">'+s.total+'</div><div class="xs muted" style="text-align:right;letter-spacing:.05em">PTS</div></div></div>';
       });
       if(resultsPosted===0) h+='<p class="xs muted" style="margin:16px 4px">Everyone\u2019s at zero until games are scored on the Results tab.</p>';
     }
   }
   else if(S.view==="compare"){ h+=compareView(); }
   else if(S.view==="results"){
-    h+='<h2 style="margin:0 4px 4px">Post actual results</h2><p class="sm muted" style="margin:0 4px 16px">Tap the team that actually won each match. Anyone can do this; it scores everyone live.'+(locked?"":" Posting the first result locks new brackets.")+'</p>';
+    h+='<h2 style="margin:0 4px 4px">Post actual results</h2><p class="sm muted" style="margin:0 4px 16px">Tap the team that actually won each match. Anyone can do this; it scores everyone live. Finishing a round opens the next round\u2019s fresh bracket for everyone.</p>';
     h+=bracketHTML(S.results,{round:S.resRound,resultMode:true});
-    if(locked) h+='<button class="btn muted" data-act="clear" style="margin-top:20px">Clear all results (reopens brackets)</button>';
+    if(resultsPosted>0) h+='<button class="btn muted" data-act="clear" style="margin-top:20px">Clear all results (careful — affects every bracket\u2019s score)</button>';
   }
   h+='</div>';
   return h;
@@ -419,13 +488,14 @@ document.getElementById("app").addEventListener("click",function(e){
   var el=e.target.closest("[data-act]"); if(!el) return;
   var act=el.getAttribute("data-act");
   if(act==="tab"){ var t=el.getAttribute("data-tab"); set({view:t}); if(t==="board") refreshNow(); }
-  else if(act==="round"){ var rk=el.getAttribute("data-round"); if(S.view==="results") set({resRound:rk}); else if(S.view==="compare") set({cmpRound:rk}); else set({buildRound:rk}); window.scrollTo({top:0,behavior:"smooth"}); }
+  else if(act==="round"){ var rk=el.getAttribute("data-round"); if(S.view==="results") set({resRound:rk}); else if(S.view==="compare") set({cmpRound:rk}); else { var fl=(S.view==="build")?(S.buildPhase||0):((typeof S.viewPhase==="number")?S.viewPhase:0); if(ROUNDS.findIndex(function(r){return r.key===rk})>=fl) set({buildRound:rk}); } window.scrollTo({top:0,behavior:"smooth"}); }
   else if(act==="nextround"){ var i=ROUNDS.findIndex(function(r){return r.key===S.buildRound}); if(i<ROUNDS.length-1){ set({buildRound:ROUNDS[i+1].key}); window.scrollTo({top:0,behavior:"smooth"}); } }
+  else if(act==="cmpphase"){ var cph=parseInt(el.getAttribute("data-phase"),10); set({cmpPhase:cph,cmpRound:ROUNDS[cph].key}); }
   else if(act==="pick"){ pick(el.getAttribute("data-id"), decodeURIComponent(el.getAttribute("data-team"))); }
   else if(act==="startbuild") startBuild();
   else if(act==="submit") submit();
   else if(act==="canceltemp") set({confirmSubmit:false});
-  else if(act==="viewmine") set({buildRound:"r32",view:"mine"});
+  else if(act==="viewmine"){ var vp=parseInt(el.getAttribute("data-phase")||"0",10); set({viewPhase:vp,buildRound:ROUNDS[vp].key,view:"mine"}); }
   else if(act==="create") createPool();
   else if(act==="login") login();
   else if(act==="logout") logout();
