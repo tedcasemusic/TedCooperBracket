@@ -265,6 +265,19 @@ function maxComposite(nameKey,results){
   }
   return t;
 }
+/* ceiling counting only picks that survive under BOTH scenarios — the common floor */
+function sharedCeiling(nameKey,resA,resB){
+  function ok(pk,m,res){ return res[m] ? res[m]===pk : participantsOf(m,res).indexOf(pk)>=0; }
+  var t=0;
+  for(var i=0;i<5;i++){
+    var e=phaseEntries(i)[nameKey]; if(!e) continue;
+    scoreableFrom(i).forEach(function(m){
+      var pk=e.picks[m]; if(!pk) return;
+      if(ok(pk,m,resA)&&ok(pk,m,resB)) t+=POINTS[ROUND_OF[m]];
+    });
+  }
+  return t;
+}
 function stakesView(){
   var nameMap={}; Object.keys(S.entries).forEach(function(pk){ Object.keys(S.entries[pk]).forEach(function(nk){ nameMap[nk]=S.entries[pk][nk].name; }); });
   var keys=Object.keys(nameMap);
@@ -277,7 +290,7 @@ function stakesView(){
     if(ab[0]&&ab[1]) up.push({m:m,a:ab[0],b:ab[1]});
   });
   var h='<div class="rowhead"><h2>What\u2019s at stake</h2><span class="xs muted">'+up.length+' games</span></div>';
-  h+='<p class="xs muted" style="margin:-6px 4px 14px">For each result: points banked now, and the <b style="color:var(--chalk)">net</b> — how many points better or worse off that player is with this result vs the other, counting every downstream pick it keeps alive or kills, across all brackets.</p>';
+  h+='<p class="xs muted" style="margin:-6px 4px 14px">Under each result: only the players who gain from it. <b style="color:var(--chalk)">Now</b> is points banked immediately; <b style="color:var(--chalk)">net</b> is the result\u2019s full value — points banked plus every future pick it keeps alive, across all brackets.</p>';
   if(!up.length) return h+'<p class="sm muted" style="padding:0 4px">No decided matchups are waiting — post results or finish the round to see the next games.</p>';
   var lastRound="";
   up.forEach(function(g){
@@ -286,23 +299,23 @@ function stakesView(){
     var resA=Object.assign({},S.results); resA[g.m]=g.a;
     var resB=Object.assign({},S.results); resB[g.m]=g.b;
     var rows=keys.map(function(k){
-      return {k:k, gA:gainFor(k,g.m,g.a), gB:gainFor(k,g.m,g.b), mA:maxComposite(k,resA), mB:maxComposite(k,resB)};
+      var cS=sharedCeiling(k,resA,resB);
+      return {k:k, nA:gainFor(k,g.m,g.a), nB:gainFor(k,g.m,g.b), gA:maxComposite(k,resA)-cS, gB:maxComposite(k,resB)-cS};
     });
-    var bestA=Math.max.apply(null,rows.map(function(x){return x.mA-x.mB;}));
-    var bestB=Math.max.apply(null,rows.map(function(x){return x.mB-x.mA;}));
+    var bestA=Math.max.apply(null,rows.map(function(x){return x.gA;}));
+    var bestB=Math.max.apply(null,rows.map(function(x){return x.gB;}));
     function side(team,which,best){
-      var chips=rows.map(function(x){
-        var gDir=which==="A"?x.gA:x.gB;
-        var d=which==="A"?(x.mA-x.mB):(x.mB-x.mA);
-        var hot=d>0&&d===best;
-        var dTxt=d>0?('<b class="gold">+'+d+'</b>'):(d<0?('<b style="color:#D08770">\u2212'+(-d)+'</b>'):'<span class="muted">±0</span>');
-        return '<span style="display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:5px 10px;font-size:12px;background:'+(hot?"rgba(242,193,78,.18)":"var(--soft)")+';border:1px solid '+(hot?"var(--gold)":"var(--line)")+'"><span class="muted">'+esc(firstName(nameMap[x.k]))+'</span><span class="muted">now</span><b style="color:'+(gDir>0?"var(--chalk)":"var(--muted)")+'">+'+gDir+'</b><span class="muted">· net</span>'+dTxt+'</span>';
-      }).join(" ");
+      var winners=rows.filter(function(x){ return (which==="A"?x.gA:x.gB)>0; });
+      var chips = winners.length ? winners.map(function(x){
+        var d=which==="A"?x.gA:x.gB, now=which==="A"?x.nA:x.nB, hot=d===best;
+        var nowTxt = now>0 ? '<span class="muted">now</span><b style="color:var(--chalk)">+'+now+'</b><span class="muted">·</span>' : '';
+        return '<span style="display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:5px 10px;font-size:12px;background:'+(hot?"rgba(242,193,78,.18)":"var(--soft)")+';border:1px solid '+(hot?"var(--gold)":"var(--line)")+'"><span class="muted">'+esc(firstName(nameMap[x.k]))+'</span>'+nowTxt+'<span class="muted">net</span><b class="gold">+'+d+'</b></span>';
+      }).join(" ") : '<span class="xs muted">no one gains</span>';
       return '<div style="padding:10px 12px"><div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><span style="font-size:22px;line-height:1">'+flag(team)+'</span><span style="font-weight:700;font-size:15px">'+esc(team)+' wins</span></div><div style="display:flex;flex-wrap:wrap;gap:6px">'+chips+'</div></div>';
     }
-    var maxSwing=0, swingWho=[];
-    rows.forEach(function(x){ var d=Math.abs(x.mA-x.mB); if(d>maxSwing){ maxSwing=d; swingWho=[firstName(nameMap[x.k])]; } else if(d===maxSwing&&d>0){ swingWho.push(firstName(nameMap[x.k])); } });
-    h+='<div class="match" style="margin-bottom:12px"><div class="matchlbl" style="padding-bottom:2px">'+flag(g.a)+' '+esc(g.a)+' vs '+esc(g.b)+' '+flag(g.b)+(maxSwing>0?' · <span class="gold">'+esc(swingWho.join(" & "))+': '+maxSwing+'-pt swing</span>':'')+'</div>'+side(g.a,"A",bestA)+'<div class="vs"><span class="ln"></span><span class="t">OR</span><span class="ln"></span></div>'+side(g.b,"B",bestB)+'</div>';
+    var biggest=0, who=[];
+    rows.forEach(function(x){ var d=Math.max(x.gA,x.gB); if(d>biggest){ biggest=d; who=[firstName(nameMap[x.k])]; } else if(d===biggest&&d>0){ who.push(firstName(nameMap[x.k])); } });
+    h+='<div class="match" style="margin-bottom:12px"><div class="matchlbl" style="padding-bottom:2px">'+flag(g.a)+' '+esc(g.a)+' vs '+esc(g.b)+' '+flag(g.b)+(biggest>0?' · <span class="gold">'+esc(who.join(" & "))+': up to +'+biggest+'</span>':'')+'</div>'+side(g.a,"A",bestA)+'<div class="vs"><span class="ln"></span><span class="t">OR</span><span class="ln"></span></div>'+side(g.b,"B",bestB)+'</div>';
   });
   return h;
 }
