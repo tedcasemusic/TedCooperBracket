@@ -243,6 +243,42 @@ function scoringCard(){
   return '<div class="card"><div class="lbl gold">Scoring</div><div class="scoregrid">'+rows.map(function(r){return '<span class="muted">'+r[0]+'</span><span class="r">'+r[1]+' pt'+(r[1]==="1"?"":"s")+'</span>'}).join("")+'</div></div>';
 }
 function firstName(n){ var f=(n||"").trim().split(/\s+/)[0]||(n||""); return f.length>11?f.slice(0,11):f; }
+function gainFor(nameKey,m,team){ var g=0; for(var i=0;i<5;i++){ if(RIDX[ROUND_OF[m]]<i) continue; var e=phaseEntries(i)[nameKey]; if(e&&e.picks[m]===team) g+=POINTS[ROUND_OF[m]]; } return g; }
+function stakesView(){
+  var nameMap={}; Object.keys(S.entries).forEach(function(pk){ Object.keys(S.entries[pk]).forEach(function(nk){ nameMap[nk]=S.entries[pk][nk].name; }); });
+  var keys=Object.keys(nameMap);
+  if(!keys.length) return '<p class="sm muted" style="padding:0 4px">No brackets yet — nothing at stake.</p>';
+  /* undecided matches where both teams are known from real results */
+  var up=[];
+  SCOREABLE.forEach(function(m){
+    if(S.results[m]) return;
+    var ab = m==="THIRD" ? [loserOf("SF1",S.results),loserOf("SF2",S.results)] : teamsOf(m,S.results);
+    if(ab[0]&&ab[1]) up.push({m:m,a:ab[0],b:ab[1]});
+  });
+  var h='<div class="rowhead"><h2>What\u2019s at stake</h2><span class="xs muted">'+up.length+' games</span></div>';
+  h+='<p class="xs muted" style="margin:-6px 4px 14px">Points each player gains if that team wins — counted across every bracket they\u2019ve submitted.</p>';
+  if(!up.length) return h+'<p class="sm muted" style="padding:0 4px">No decided matchups are waiting — post results or finish the round to see the next games.</p>';
+  var lastRound="";
+  up.forEach(function(g){
+    var rname = g.m==="FIN" ? "Final" : (g.m==="THIRD" ? "Third-place playoff" : ROUNDS[RIDX[ROUND_OF[g.m]]].label);
+    if(rname!==lastRound){ h+='<div class="half" style="margin:6px 4px 10px"><span class="lbl">'+esc(rname)+'</span><span class="ln"></span></div>'; lastRound=rname; }
+    var gA=keys.map(function(k){return {k:k,g:gainFor(k,g.m,g.a)};});
+    var gB=keys.map(function(k){return {k:k,g:gainFor(k,g.m,g.b)};});
+    var maxA=Math.max.apply(null,gA.map(function(x){return x.g;}));
+    var maxB=Math.max.apply(null,gB.map(function(x){return x.g;}));
+    function side(team,gains,mx){
+      var chips=gains.map(function(x){
+        var hot=x.g>0&&x.g===mx;
+        return '<span style="display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:4px 10px;font-size:12px;background:'+(hot?"rgba(242,193,78,.18)":"var(--soft)")+';border:1px solid '+(hot?"var(--gold)":"var(--line)")+';opacity:'+(x.g>0?"1":"0.55")+'"><span class="muted">'+esc(firstName(nameMap[x.k]))+'</span><b style="color:'+(x.g>0?"var(--gold)":"var(--muted)")+'">+'+x.g+'</b></span>';
+      }).join(" ");
+      return '<div style="padding:10px 12px"><div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><span style="font-size:22px;line-height:1">'+flag(team)+'</span><span style="font-weight:700;font-size:15px">'+esc(team)+' wins</span></div><div style="display:flex;flex-wrap:wrap;gap:6px">'+chips+'</div></div>';
+    }
+    var swings=keys.map(function(k,i){return Math.abs(gA[i].g-gB[i].g);});
+    var maxSwing=Math.max.apply(null,swings);
+    h+='<div class="match" style="margin-bottom:12px"><div class="matchlbl" style="padding-bottom:2px">'+flag(g.a)+' '+esc(g.a)+' vs '+esc(g.b)+' '+flag(g.b)+(maxSwing>0?' · <span class="gold">swing up to '+maxSwing+' pts</span>':'')+'</div>'+side(g.a,gA,maxA)+'<div class="vs"><span class="ln"></span><span class="t">OR</span><span class="ln"></span></div>'+side(g.b,gB,maxB)+'</div>';
+  });
+  return h;
+}
 function distinctDefined(arr){ var out=[]; arr.forEach(function(v){ if(v&&out.indexOf(v)<0) out.push(v); }); return out; }
 function compareView(){
   var phasesWith=[]; for(var i=0;i<5;i++) if(Object.keys(phaseEntries(i)).length) phasesWith.push(i);
@@ -382,14 +418,20 @@ function mainView(){
   var resultsPosted=SCOREABLE.filter(function(m){return S.results[m]}).length;
   var chipTxt = ph>4 ? "🏁 Finished" : (phLocked ? "🔒 "+ROUNDS[ph].short+" locked" : ROUNDS[ph].short+" open");
   var h='<div class="hdr"><div class="hdrtop"><div><div class="eyebrow">World Cup 2026</div><h1 style="font-size:20px">'+esc(S.pool.name)+'</h1></div><span class="chip'+(phLocked?" gold":"")+'">'+chipTxt+'</span></div>';
-  h+='<div class="tabs"><button class="tab'+(["home","build","mine"].indexOf(S.view)>=0?" on":"")+'" data-act="tab" data-tab="home">🎯 Pool</button><button class="tab'+(S.view==="board"?" on":"")+'" data-act="tab" data-tab="board">🏅 Standings</button><button class="tab'+(S.view==="compare"?" on":"")+'" data-act="tab" data-tab="compare">🆚 Compare</button><button class="tab'+(S.view==="results"?" on":"")+'" data-act="tab" data-tab="results">🏆 Results</button></div></div>';
+  h+='<div class="tabs"><button class="tab'+(["home","build","mine"].indexOf(S.view)>=0?" on":"")+'" data-act="tab" data-tab="home">🎯 Pool</button><button class="tab'+(S.view==="board"?" on":"")+'" data-act="tab" data-tab="board">🏅 Standings</button><button class="tab'+(S.view==="stakes"?" on":"")+'" data-act="tab" data-tab="stakes">⚡ Stakes</button><button class="tab'+(S.view==="compare"?" on":"")+'" data-act="tab" data-tab="compare">🆚 Compare</button><button class="tab'+(S.view==="results"?" on":"")+'" data-act="tab" data-tab="results">🏆 Results</button></div></div>';
   h+='<div class="wrap" style="padding-top:20px">';
   if(S.err) h+='<div class="banner">'+esc(S.err)+'</div>';
 
   if(S.view==="home"){
     h+='<div class="stack">';
     if(!S.me){
-      h+='<div class="card"><div style="font-size:18px;font-weight:700;margin-bottom:4px">Join the pool</div><p class="sm muted" style="margin-bottom:12px">Enter your name to make your own bracket. You can browse Standings and Compare without it.</p><input class="inp" data-field="login" placeholder="Your name" value="'+esc(dLogin)+'" style="margin-bottom:8px">'+(S.notice?'<p class="sm gold" style="margin:0 4px 8px">'+esc(S.notice)+'</p>':"")+'<button class="btn gold" data-act="login">Join &amp; make my bracket</button></div>';
+      var known={}; Object.keys(S.entries).forEach(function(pk){ Object.keys(S.entries[pk]).forEach(function(nk){ known[nk]=S.entries[pk][nk].name; }); });
+      var knownKeys=Object.keys(known);
+      if(knownKeys.length){
+        h+='<div class="card"><div style="font-size:18px;font-weight:700;margin-bottom:4px">Who\u2019s this?</div><p class="sm muted" style="margin-bottom:12px">Sign back in to see your brackets and make picks.</p><div style="display:flex;flex-direction:column;gap:8px">'+knownKeys.map(function(nk){ return '<button class="btn ghost" data-act="loginas" data-name="'+encodeURIComponent(known[nk])+'">'+esc(known[nk])+'</button>'; }).join("")+'</div><details style="margin-top:12px"><summary class="xs muted" style="cursor:pointer">Someone new?</summary><input class="inp" data-field="login" placeholder="Your name" value="'+esc(dLogin)+'" style="margin:10px 0 8px">'+(S.notice?'<p class="sm gold" style="margin:0 4px 8px">'+esc(S.notice)+'</p>':"")+'<button class="btn muted" data-act="login">Sign in</button></details></div>';
+      } else {
+        h+='<div class="card"><div style="font-size:18px;font-weight:700;margin-bottom:4px">Join the pool</div><p class="sm muted" style="margin-bottom:12px">Enter your name to make your own bracket.</p><input class="inp" data-field="login" placeholder="Your name" value="'+esc(dLogin)+'" style="margin-bottom:8px">'+(S.notice?'<p class="sm gold" style="margin:0 4px 8px">'+esc(S.notice)+'</p>':"")+'<button class="btn gold" data-act="login">Join</button></div>';
+      }
     } else {
     h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:0 4px"><span class="sm muted">Signed in as <b style="color:var(--chalk)">'+esc(S.me)+'</b></span><button class="btn sm muted" data-act="logout">Switch</button></div>';
     var comp=compositeFor(norm(S.me));
@@ -474,6 +516,7 @@ function mainView(){
     }
   }
   else if(S.view==="compare"){ h+=compareView(); }
+  else if(S.view==="stakes"){ h+=stakesView(); }
   else if(S.view==="results"){
     h+='<h2 style="margin:0 4px 4px">Post actual results</h2><p class="sm muted" style="margin:0 4px 16px">Tap the team that actually won each match. Anyone can do this; it scores everyone live. Finishing a round opens the next round\u2019s fresh bracket for everyone.</p>';
     h+=bracketHTML(S.results,{round:S.resRound,resultMode:true});
@@ -498,6 +541,7 @@ document.getElementById("app").addEventListener("click",function(e){
   else if(act==="viewmine"){ var vp=parseInt(el.getAttribute("data-phase")||"0",10); set({viewPhase:vp,buildRound:ROUNDS[vp].key,view:"mine"}); }
   else if(act==="create") createPool();
   else if(act==="login") login();
+  else if(act==="loginas"){ var lname=decodeURIComponent(el.getAttribute("data-name")||""); if(lname){ try{localStorage.setItem("wc_name",lname)}catch(e){} S.me=lname; set({notice:"",view:"home"}); } }
   else if(act==="logout") logout();
   else if(act==="refresh") refreshNow();
   else if(act==="retry"){ S.err=""; S.loading=true; render(); refreshNow().then(function(){ S.loading=false; render(); }); }
