@@ -244,6 +244,27 @@ function scoringCard(){
 }
 function firstName(n){ var f=(n||"").trim().split(/\s+/)[0]||(n||""); return f.length>11?f.slice(0,11):f; }
 function gainFor(nameKey,m,team){ var g=0; for(var i=0;i<5;i++){ if(RIDX[ROUND_OF[m]]<i) continue; var e=phaseEntries(i)[nameKey]; if(e&&e.picks[m]===team) g+=POINTS[ROUND_OF[m]]; } return g; }
+/* which teams can still end up winning slot m, given a results object */
+function participantsOf(m,results){
+  if(R32MAP[m]) return [R32MAP[m].a,R32MAP[m].b];
+  if(m==="THIRD") return possibleLosers("SF1",results).concat(possibleLosers("SF2",results));
+  var t=TREE[m]; return winnersOf(t[0],results).concat(winnersOf(t[1],results));
+}
+function winnersOf(m,results){ return results[m]?[results[m]]:participantsOf(m,results); }
+function possibleLosers(m,results){ var ps=participantsOf(m,results); if(results[m]) return ps.filter(function(x){return x!==results[m];}); return ps; }
+/* max composite still reachable: earned points + every unresolved pick whose team is still alive for that slot */
+function maxComposite(nameKey,results){
+  var t=0;
+  for(var i=0;i<5;i++){
+    var e=phaseEntries(i)[nameKey]; if(!e) continue;
+    scoreableFrom(i).forEach(function(m){
+      var pk=e.picks[m]; if(!pk) return;
+      if(results[m]){ if(results[m]===pk) t+=POINTS[ROUND_OF[m]]; }
+      else if(participantsOf(m,results).indexOf(pk)>=0) t+=POINTS[ROUND_OF[m]];
+    });
+  }
+  return t;
+}
 function stakesView(){
   var nameMap={}; Object.keys(S.entries).forEach(function(pk){ Object.keys(S.entries[pk]).forEach(function(nk){ nameMap[nk]=S.entries[pk][nk].name; }); });
   var keys=Object.keys(nameMap);
@@ -256,26 +277,31 @@ function stakesView(){
     if(ab[0]&&ab[1]) up.push({m:m,a:ab[0],b:ab[1]});
   });
   var h='<div class="rowhead"><h2>What\u2019s at stake</h2><span class="xs muted">'+up.length+' games</span></div>';
-  h+='<p class="xs muted" style="margin:-6px 4px 14px">Points each player gains if that team wins — counted across every bracket they\u2019ve submitted.</p>';
+  h+='<p class="xs muted" style="margin:-6px 4px 14px">For each result: points banked now, plus each player\u2019s <b style="color:var(--chalk)">max</b> — the most they can still finish with, counting every future pick that result keeps alive or kills, across all brackets.</p>';
   if(!up.length) return h+'<p class="sm muted" style="padding:0 4px">No decided matchups are waiting — post results or finish the round to see the next games.</p>';
   var lastRound="";
   up.forEach(function(g){
     var rname = g.m==="FIN" ? "Final" : (g.m==="THIRD" ? "Third-place playoff" : ROUNDS[RIDX[ROUND_OF[g.m]]].label);
     if(rname!==lastRound){ h+='<div class="half" style="margin:6px 4px 10px"><span class="lbl">'+esc(rname)+'</span><span class="ln"></span></div>'; lastRound=rname; }
-    var gA=keys.map(function(k){return {k:k,g:gainFor(k,g.m,g.a)};});
-    var gB=keys.map(function(k){return {k:k,g:gainFor(k,g.m,g.b)};});
-    var maxA=Math.max.apply(null,gA.map(function(x){return x.g;}));
-    var maxB=Math.max.apply(null,gB.map(function(x){return x.g;}));
-    function side(team,gains,mx){
-      var chips=gains.map(function(x){
-        var hot=x.g>0&&x.g===mx;
-        return '<span style="display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:4px 10px;font-size:12px;background:'+(hot?"rgba(242,193,78,.18)":"var(--soft)")+';border:1px solid '+(hot?"var(--gold)":"var(--line)")+';opacity:'+(x.g>0?"1":"0.55")+'"><span class="muted">'+esc(firstName(nameMap[x.k]))+'</span><b style="color:'+(x.g>0?"var(--gold)":"var(--muted)")+'">+'+x.g+'</b></span>';
+    var resA=Object.assign({},S.results); resA[g.m]=g.a;
+    var resB=Object.assign({},S.results); resB[g.m]=g.b;
+    var rows=keys.map(function(k){
+      return {k:k, gA:gainFor(k,g.m,g.a), gB:gainFor(k,g.m,g.b), mA:maxComposite(k,resA), mB:maxComposite(k,resB)};
+    });
+    var bestA=Math.max.apply(null,rows.map(function(x){return x.mA;}));
+    var bestB=Math.max.apply(null,rows.map(function(x){return x.mB;}));
+    function side(team,which,best){
+      var chips=rows.map(function(x){
+        var gDir=which==="A"?x.gA:x.gB, mx=which==="A"?x.mA:x.mB, other=which==="A"?x.mB:x.mA;
+        var hot=mx===best;
+        var arrow = mx>other ? ' <span class="gold">▲</span>' : (mx<other ? ' <span style="color:var(--muted)">▼</span>' : "");
+        return '<span style="display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:5px 10px;font-size:12px;background:'+(hot?"rgba(242,193,78,.18)":"var(--soft)")+';border:1px solid '+(hot?"var(--gold)":"var(--line)")+'"><span class="muted">'+esc(firstName(nameMap[x.k]))+'</span><b style="color:'+(gDir>0?"var(--gold)":"var(--muted)")+'">+'+gDir+'</b><span class="muted">·</span><span>max '+mx+arrow+'</span></span>';
       }).join(" ");
       return '<div style="padding:10px 12px"><div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><span style="font-size:22px;line-height:1">'+flag(team)+'</span><span style="font-weight:700;font-size:15px">'+esc(team)+' wins</span></div><div style="display:flex;flex-wrap:wrap;gap:6px">'+chips+'</div></div>';
     }
-    var swings=keys.map(function(k,i){return Math.abs(gA[i].g-gB[i].g);});
-    var maxSwing=Math.max.apply(null,swings);
-    h+='<div class="match" style="margin-bottom:12px"><div class="matchlbl" style="padding-bottom:2px">'+flag(g.a)+' '+esc(g.a)+' vs '+esc(g.b)+' '+flag(g.b)+(maxSwing>0?' · <span class="gold">swing up to '+maxSwing+' pts</span>':'')+'</div>'+side(g.a,gA,maxA)+'<div class="vs"><span class="ln"></span><span class="t">OR</span><span class="ln"></span></div>'+side(g.b,gB,maxB)+'</div>';
+    var maxSwing=0, swingWho=[];
+    rows.forEach(function(x){ var d=Math.abs(x.mA-x.mB); if(d>maxSwing){ maxSwing=d; swingWho=[firstName(nameMap[x.k])]; } else if(d===maxSwing&&d>0){ swingWho.push(firstName(nameMap[x.k])); } });
+    h+='<div class="match" style="margin-bottom:12px"><div class="matchlbl" style="padding-bottom:2px">'+flag(g.a)+' '+esc(g.a)+' vs '+esc(g.b)+' '+flag(g.b)+(maxSwing>0?' · <span class="gold">'+esc(swingWho.join(" & "))+': '+maxSwing+'-pt swing</span>':'')+'</div>'+side(g.a,"A",bestA)+'<div class="vs"><span class="ln"></span><span class="t">OR</span><span class="ln"></span></div>'+side(g.b,"B",bestB)+'</div>';
   });
   return h;
 }
